@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2020,2021 The Eclipse Foundation and others.
+ * Copyright (c) 2020,2022 The Eclipse Foundation and others.
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -10,14 +10,14 @@
 package org.eclipse.dash.licenses.review;
 
 import java.io.OutputStream;
-import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 
+import org.eclipse.dash.licenses.IContentId;
 import org.eclipse.dash.licenses.LicenseData;
 import org.eclipse.dash.licenses.LicenseSupport.Status;
 import org.eclipse.dash.licenses.cli.IResultsCollector;
-import org.eclipse.dash.licenses.context.IContext;
 
 /**
  * The "Create Review Request" collector tracks the results that likely require
@@ -26,13 +26,14 @@ import org.eclipse.dash.licenses.context.IContext;
  * a review request.
  */
 public class CreateReviewRequestCollector implements IResultsCollector {
-	private IContext context;
-	private PrintWriter output;
-	private List<LicenseData> needsReview = new ArrayList<>();
 
-	public CreateReviewRequestCollector(IContext context, OutputStream out) {
-		this.context = context;
-		output = new PrintWriter(out);
+	private GitLabSupport gitLab;
+	private List<LicenseData> needsReview = new ArrayList<>();
+	private BiConsumer<IContentId, String> monitor;
+
+	public CreateReviewRequestCollector(GitLabSupport gitLab, BiConsumer<IContentId, String> monitor) {
+		this.gitLab = gitLab;
+		this.monitor = monitor;
 	}
 
 	@Override
@@ -45,10 +46,8 @@ public class CreateReviewRequestCollector implements IResultsCollector {
 	@Override
 	public void close() {
 		if (!needsReview.isEmpty()) {
-			var gitlab = context.getGitLabService();
-			gitlab.createReviews(needsReview, output);
+			gitLab.createReviews(needsReview, monitor);
 		}
-		output.flush();
 	}
 
 	@Override

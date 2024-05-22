@@ -10,6 +10,7 @@
 package org.eclipse.dash.licenses.spdx;
 
 import java.util.Collection;
+import java.util.function.Function;
 
 public class SpdxGroup extends SpdxExpression {
 
@@ -21,13 +22,43 @@ public class SpdxGroup extends SpdxExpression {
 
 	@Override
 	public String toString() {
-		// Note that we don't print any parentheses, because they don't really add any
-		// information after parsing.
-		return expression.toString();
+		return "(" + expression.toString() + ")";
+	}
+
+	@Override
+	public String toAnnotatedString(Function<String, String> annotator) {
+		return "(" + expression.toAnnotatedString(annotator) + ")";
+	}
+
+	@Override
+	public SpdxExpression collapse() {
+		var collapsed = expression.collapse();
+		if (collapsed.isBinary())
+			return new SpdxGroup(collapsed);
+		return collapsed;
 	}
 
 	@Override
 	public boolean matchesApproved(Collection<String> approved) {
 		return expression.matchesApproved(approved);
+	}
+
+	@Override
+	public boolean contains(SpdxExpression value) {
+		return expression.contains(value);
+	}
+
+	@Override
+	public boolean equals(Object object) {
+		if (object instanceof SpdxGroup) {
+			var group = (SpdxGroup) object;
+			return this.expression.equals(group.expression);
+		}
+		return false;
+	}
+
+	@Override
+	public int hashCode() {
+		return this.expression.hashCode();
 	}
 }

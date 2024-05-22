@@ -10,6 +10,7 @@
 package org.eclipse.dash.licenses.spdx;
 
 import java.util.Collection;
+import java.util.function.Function;
 
 public class SpdxPlus extends SpdxExpression {
 	private SpdxIdentifier identifier;
@@ -33,5 +34,24 @@ public class SpdxPlus extends SpdxExpression {
 	@Override
 	public String toString() {
 		return identifier.toString() + "+";
+	}
+
+	@Override
+	public String toAnnotatedString(Function<String, String> annotator) {
+		return identifier.toAnnotatedString(annotator) + "+";
+	}
+
+	@Override
+	public boolean equals(Object object) {
+		if (object instanceof SpdxPlus) {
+			var plus = (SpdxPlus) object;
+			return this.identifier.equals(plus.identifier);
+		}
+		return false;
+	}
+
+	@Override
+	public int hashCode() {
+		return this.identifier.hashCode() & "+".hashCode();
 	}
 }

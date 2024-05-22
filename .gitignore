@@ -1,2 +1,7 @@
 target/
-/yarn/node_modules
+bin/
+#Generated Eclipse configuration files
+.project
+.classpath
+.factorypath
+**/.settings/**

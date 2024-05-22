@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2020,2021 The Eclipse Foundation and others.
+ * Copyright (c) 2020 The Eclipse Foundation and others.
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -11,6 +11,7 @@ package org.eclipse.dash.licenses.cli;
 
 import java.io.InputStream;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -20,12 +21,19 @@ import org.eclipse.dash.licenses.ContentId;
 import org.eclipse.dash.licenses.IContentId;
 import org.eclipse.dash.licenses.InvalidContentId;
 import org.eclipse.dash.licenses.util.JsonUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import jakarta.json.JsonObject;
+import jakarta.json.JsonString;
+import jakarta.json.JsonValue;
 
 public class PackageLockFileReader implements IDependencyListReader {
+	final Logger logger = LoggerFactory.getLogger(PackageLockFileReader.class);
+	private static final Pattern Name_Pattern = Pattern.compile("(?:(?<scope>@[^\\/]+)\\/)?(?<name>[^\\/]+)$");
 
 	private final InputStream input;
+	private JsonObject json;
 
 	public PackageLockFileReader(InputStream input) {
 		this.input = input;
@@ -45,6 +53,16 @@ public class PackageLockFileReader implements IDependencyListReader {
 			this.value = value;
 		}
 
+		Collection<Package> getPackages() {
+			/*
+			 * More research is needed. AFAICT, it's possible to specify
+			 * a relative directory as the key and, my observation is that,
+			 * the directory may itself have a package-lock.json file which
+			 * would describe additional packages.
+			 */
+			return Collections.singleton(this);
+		}
+		
 		/**
 		 * The content id needs to be extracted from a combination of the key and values
 		 * from the associated associative array.
@@ -70,18 +88,81 @@ public class PackageLockFileReader implements IDependencyListReader {
 		 * It's relatively easy to handle all cases with a regular expression.
 		 */
 		IContentId getContentId() {
-			Pattern pattern = Pattern.compile("(?:(?<scope>@[^\\/]+)\\/)?(?<name>[^\\/]+)$");
-			Matcher matcher = pattern.matcher(key);
-			if (matcher.find()) {
-				var namespace = matcher.group("scope");
-				if (namespace == null)
-					namespace = "-";
-				var name = matcher.group("name");
-				var version = value.asJsonObject().getString("version");
+			var namespace = getNameSpace();
+			var name = getName();
+			var version = value.asJsonObject().getString("version", null);
 
-				return ContentId.getContentId("npm", "npmjs", namespace, name, version);
+			if (version != null) {
+				IContentId contentId = ContentId.getContentId("npm", getSource(), namespace, name, version);
+				return contentId == null ? new InvalidContentId(key + "@" + version) : contentId;
 			}
 			return new InvalidContentId(key);
+		}
+
+		String getSource() {
+			if (isResolvedLocally())
+				return "local";
+
+			var resolved = getResolved();
+			if (resolved != null && resolved.contains("registry.npmjs.org")) {
+				return "npmjs";
+			} else {
+				logger.debug("Unknown resolved source: {}", resolved);
+				return "npmjs";
+			}
+		}
+
+		String getNameSpace() {
+			var name = value.asJsonObject().getString("name", key);
+			Matcher matcher = Name_Pattern.matcher(name);
+			if (matcher.find()) {
+				var scope = matcher.group("scope");
+				if (scope != null)
+					return scope;
+			}
+
+			return "-";
+		}
+
+		String getName() {
+			var name = value.asJsonObject().getString("name", key);
+			Matcher matcher = Name_Pattern.matcher(name);
+			if (matcher.find()) {
+				return matcher.group("name");
+			}
+
+			return null;
+		}
+
+		boolean isResolvedLocally() {
+			var resolved = getResolved();
+			if (resolved == null)
+				return false;
+
+			if (resolved.startsWith("file:"))
+				return true;
+
+			if (value.asJsonObject().getString("version", "").startsWith("file:"))
+				return true;
+
+			return false;
+		}
+
+		private String getResolved() {
+			return value.asJsonObject().getString("resolved", null);
+		}
+
+		private boolean isLink() {
+			return value.asJsonObject().getBoolean("link", false);
+		}
+
+		public boolean isProjectContent() {
+			return isLink() && isInWorkspace(getResolved());
+		}
+
+		@Override
+		public String toString() {
+			return key + " : " + getResolved();
 		}
 	}
 
@@ -115,20 +196,83 @@ public class PackageLockFileReader implements IDependencyListReader {
 
 	@Override
 	public Collection<IContentId> getContentIds() {
-		JsonObject json = JsonUtils.readJson(input);
+		return contentIds().filter(contentId -> "local" != contentId.getSource()).collect(Collectors.toList());
+	}
+
+	public Stream<IContentId> contentIds() {
+		json = JsonUtils.readJson(input);
 
 		switch (json.getJsonNumber("lockfileVersion").intValue()) {
 		case 1:
 			return new Dependency("", json).stream().filter(each -> !each.key.isEmpty())
-					.map(dependency -> dependency.getContentId()).collect(Collectors.toList());
+					.map(dependency -> dependency.getContentId());
 		case 2:
 		case 3:
-			return json.getJsonObject("packages").entrySet().stream().filter(entry -> !entry.getKey().isEmpty())
+			// @formatter:off
+			return json.getJsonObject("packages").entrySet().stream()
+					.filter(entry -> !entry.getKey().isEmpty())
 					.map(entry -> new Package(entry.getKey(), entry.getValue().asJsonObject()))
-					.map(dependency -> dependency.getContentId()).distinct().collect(Collectors.toList());
+					.flatMap(item -> item.getPackages().stream())
+					.filter(item -> !item.isProjectContent())
+					.map(dependency -> dependency.getContentId());
+			// @formatter:on
 		}
 
-		return null;
+		return Stream.empty();
 	}
 
+	/**
+	 * Answer whether or not a resolved link points to a workspace. This is true
+	 * when the link is <code>true</code> and the resolved path matches a workspace
+	 * specified in the header.
+	 * 
+	 * <pre>
+	 * ...
+	 * "node_modules/vscode-js-profile-core": {
+	 *   "resolved": "packages/vscode-js-profile-core",
+	 *   "link": true
+	 * },
+	 * ...
+	 * </pre>
+	 * 
+	 * @param value
+	 * @return
+	 */
+	boolean isInWorkspace(String value) {
+		if (value == null) return false;
+
+		return getWorkspaces().anyMatch(each -> glob(each, value));
+	}
+
+	private Stream<String> getWorkspaces() {
+		return getRootPackage()
+				.getOrDefault("workspaces", JsonValue.EMPTY_JSON_ARRAY).asJsonArray()
+				.getValuesAs(JsonString.class).stream().map(JsonString::getString);
+	}
+
+	/**
+	 * The root package is the one that has an empty string as the key. It's not at
+	 * all clear to me whether package-lock.json file have more than one package;
+	 * more research is required.
+	 */
+	private JsonObject getRootPackage() {
+		return getPackages().entrySet().stream()
+				.filter(entry -> entry.getKey().isEmpty())
+				.map(entry -> entry.getValue().asJsonObject())
+				.findFirst().orElse(JsonValue.EMPTY_JSON_OBJECT);
+	}
+
+	private JsonObject getPackages() {
+		return json.getOrDefault("packages", JsonValue.EMPTY_JSON_OBJECT).asJsonObject();
+	}
+
+	/**
+	 * Do a glob match. The build-in function is a little too tightly coupled with
+	 * the file system for my liking. This implements a simple translation from glob
+	 * to regex that should hopefully suit most of our requirements.
+	 */
+	boolean glob(String pattern, String value) {
+		var regex = pattern.replace("/", "\\/").replace(".", "/.").replace("*", ".*");
+		return Pattern.matches(regex, value);
+	}
 }
