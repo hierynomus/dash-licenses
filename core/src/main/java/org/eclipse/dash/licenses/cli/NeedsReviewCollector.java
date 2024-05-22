@@ -10,12 +10,13 @@
 package org.eclipse.dash.licenses.cli;
 
 import java.io.OutputStream;
-import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.dash.licenses.LicenseData;
 import org.eclipse.dash.licenses.LicenseSupport.Status;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The "Needs Review" collector tracks the results that likely require some
@@ -23,12 +24,11 @@ import org.eclipse.dash.licenses.LicenseSupport.Status;
  * output to an {@link OutputStream} when the instance is closed.
  */
 public class NeedsReviewCollector implements IResultsCollector {
+	final Logger logger = LoggerFactory.getLogger(NeedsReviewCollector.class);
 
-	private PrintWriter output;
 	private List<LicenseData> needsReview = new ArrayList<>();
 
-	public NeedsReviewCollector(OutputStream out) {
-		output = new PrintWriter(out);
+	public NeedsReviewCollector() {
 	}
 
 	@Override
@@ -41,20 +41,14 @@ public class NeedsReviewCollector implements IResultsCollector {
 	@Override
 	public void close() {
 		if (needsReview.isEmpty()) {
-			output.println(
-					"Vetted license information was found for all content. No further investigation is required.");
+			logger.info("Vetted license information was found for all content. No further investigation is required.");
 		} else {
-			output.println("License information could not be automatically verified for the following content:");
-			output.println();
-			needsReview.stream().sorted((a, b) -> a.getId().compareTo(b.getId()))
-					.forEach(each -> output.println(each.getId()));
-			output.println();
-			output.println("This content is either not correctly mapped by the system, or requires review.");
-
-			output.println();
-			output.println("");
+			logger.info("License information could not be automatically verified for the following content:");
+			logger.info("");
+			needsReview.stream().map(LicenseData::getId).map(each -> each.toString()).sorted().forEach(logger::info);
+			logger.info("");
+			logger.info("This content is either not correctly mapped by the system, or requires review.");
 		}
-		output.flush();
 	}
 
 	@Override

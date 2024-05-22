@@ -31,8 +31,11 @@ public class CommandLineSettings implements ISettings {
 	private static final String CONFIDENCE_OPTION = "confidence";
 	private static final String SUMMARY_OPTION = "summary";
 	private static final String REVIEW_OPTION = "review";
+	private static final String EXCLUDE_SOURCES_OPTION = "excludeSources";
 	private static final String TOKEN_OPTION = "token";
 	private static final String PROJECT_OPTION = "project";
+	
+	private static final String REPO_OPTION = "repo";
 
 	private CommandLine commandLine;
 
@@ -91,7 +94,12 @@ public class CommandLineSettings implements ISettings {
 
 	@Override
 	public String getIpLabToken() {
-		return commandLine.getOptionValue(TOKEN_OPTION);
+		String value = commandLine.getOptionValue(TOKEN_OPTION);
+		if (value == null) {
+			// FIXME generalize this (maybe rethink the whole settings thing)
+			value = System.getenv("DASH_TOKEN");
+		}
+		return value;
 	}
 
 	public boolean isValid() {
@@ -232,6 +240,13 @@ public class CommandLineSettings implements ISettings {
 			.desc("Must also specify the project and token")
 			.build());
 
+		options.addOption(Option.builder(EXCLUDE_SOURCES_OPTION)
+				.required(false)
+				.hasArg(true)
+				.argName("sources")
+				.desc("Exclude values from specific sources")
+				.build());
+		
 		options.addOption(Option.builder(TOKEN_OPTION)
 			.required(false)
 			.hasArg()
@@ -248,6 +263,14 @@ public class CommandLineSettings implements ISettings {
 			.desc("Process the request in the context of an Eclipse project (e.g., technology.dash)")
 			.build());
 
+		options.addOption(Option.builder(REPO_OPTION)
+			.required(false)
+			.hasArg()
+			.argName("url")
+			.type(String.class)
+			.desc("The Eclipse Project repository that is the source of the request")
+			.build());
+		
 		options.addOption(Option.builder(HELP_OPTION)
 			.longOpt(HELP_OPTION)
 			.required(false)
@@ -273,9 +296,8 @@ public class CommandLineSettings implements ISettings {
 		final HelpFormatter formatter = new HelpFormatter();
 		final String syntax = String.format("%s [options] <file> ...", Main.class.getName());
 		final String usageHeader = "Sort out the licenses and approval of dependencies.";
-		final String usageFooter = "\n" + "\n<file> is the path to a file, or \"-\" to indicate stdin. "
-				+ "Multiple files may be provided" + "\ne.g.,"
-				+ "\nnpm list | grep -Poh \"\\S+@\\d+(?:\\.\\d+){2}\" | sort | uniq | LicenseFinder -";
+		final String usageFooter = "\n<file> is the path to a file, or \"-\" to indicate stdin. "
+				+ "\nFor more help and examples, see https://github.com/eclipse/dash-licenses";
 
 		formatter.printHelp(syntax, usageHeader, getOptions(), usageFooter);
 	}
@@ -288,5 +310,16 @@ public class CommandLineSettings implements ISettings {
 	@Override
 	public String getProjectId() {
 		return commandLine.getOptionValue(PROJECT_OPTION, null);
+	}
+	
+	@Override
+	public String getRepository() {
+		var repository = commandLine.getOptionValue(REPO_OPTION, "");
+		if (repository.isBlank()) return null;
+		return repository;
+	}
+
+	public String getExcludedSources() {
+		return commandLine.getOptionValue(EXCLUDE_SOURCES_OPTION);
 	}
 }

@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2019, The Eclipse Foundation and others.
+ * Copyright (c) 2019,2021 The Eclipse Foundation and others.
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -9,9 +9,9 @@
  *************************************************************************/
 package org.eclipse.dash.licenses;
 
-import java.util.regex.Pattern;
-
 public class ContentId implements IContentId {
+
+	private static final ClearlyDefinedIdParser IdParser = new ClearlyDefinedIdParser();
 
 	private String type;
 	private String source;
@@ -27,25 +27,12 @@ public class ContentId implements IContentId {
 		this.version = version;
 	}
 
-	public static ContentId getContentId(String type, String source, String namespace, String name, String version) {
-
-		Pattern versionPattern = Pattern.compile("[\\w\\.\\-]+");
-		if (!versionPattern.matcher(version).matches())
-			return null;
-
+	public static IContentId getContentId(String type, String source, String namespace, String name, String version) {
 		return new ContentId(type, source, namespace, name, version);
 	}
 
-	public static ContentId getContentId(String string) {
-		String[] parts = string.split("\\/");
-		if (parts.length != 5)
-			return null;
-		String type = parts[0];
-		String source = parts[1];
-		String namespace = parts[2];
-		String name = parts[3];
-		String version = parts[4];
-		return getContentId(type, source, namespace, name, version);
+	public static IContentId getContentId(String string) {
+		return IdParser.parseId(string);
 	}
 
 	@Override

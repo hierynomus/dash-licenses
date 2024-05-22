@@ -10,13 +10,25 @@
 package org.eclipse.dash.licenses.spdx;
 
 import java.util.Collection;
+import java.util.function.Function;
 
 public class SpdxIdentifier extends SpdxExpression {
 
 	private String code;
 
-	public SpdxIdentifier(String code) {
+	private SpdxIdentifier(String code) {
 		this.code = code;
+	}
+
+	public static SpdxExpression code(String code) {
+		if ("NONE".equalsIgnoreCase(code))
+			return SpdxNone.INSTANCE;
+		return new SpdxIdentifier(code);
+	}
+
+	@Override
+	public String toAnnotatedString(Function<String, String> annotator) {
+		return annotator.apply(code);
 	}
 
 	@Override
@@ -32,5 +44,24 @@ public class SpdxIdentifier extends SpdxExpression {
 	@Override
 	public boolean isIdentifier() {
 		return true;
+	}
+
+	@Override
+	public boolean contains(SpdxExpression value) {
+		return this.equals(value);
+	}
+
+	@Override
+	public boolean equals(Object object) {
+		if (object instanceof SpdxIdentifier) {
+			var identifier = (SpdxIdentifier) object;
+			return this.code.equalsIgnoreCase(identifier.code);
+		}
+		return false;
+	}
+
+	@Override
+	public int hashCode() {
+		return this.code.hashCode();
 	}
 }

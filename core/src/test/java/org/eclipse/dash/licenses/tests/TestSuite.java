@@ -9,17 +9,12 @@
  *************************************************************************/
 package org.eclipse.dash.licenses.tests;
 
-import org.eclipse.dash.licenses.tests.GitLabReviewTests.IPZillaSearchBuilderTests;
-import org.junit.platform.runner.JUnitPlatform;
-import org.junit.platform.suite.api.SelectClasses;
-import org.junit.runner.RunWith;
+import org.junit.platform.suite.api.IncludeClassNamePatterns;
+import org.junit.platform.suite.api.SelectPackages;
+import org.junit.platform.suite.api.Suite;
 
-@RunWith(JUnitPlatform.class)
-@SelectClasses(
-{ BatchifierTests.class, ClearlyDefinedContentDataTests.class, ClearlyDefinedSupportTests.class,
-		CommandLineSettingsTest.class, ContentIdTests.class, LicenseCheckerTests.class, LicenseSupportTests.class,
-		MavenIdParserTests.class, NpmJsIdParserTests.class, PackageLockFileReaderTests.class,
-		SpdxExpressionParserTests.class, FoundationDataTests.class, NpmjsPackageTests.class,
-		IPZillaSearchBuilderTests.class })
+@Suite
+@SelectPackages("org.eclipse.dash.licenses.tests")
+@IncludeClassNamePatterns(".*Tests")
 public class TestSuite {
 }

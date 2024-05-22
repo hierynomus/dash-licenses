@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2019, The Eclipse Foundation and others.
+ * Copyright (c) 2019 The Eclipse Foundation and others.
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -9,10 +9,16 @@
  *************************************************************************/
 package org.eclipse.dash.licenses;
 
-import java.util.Optional;
-
 public interface ContentIdParser {
 
-	Optional<IContentId> parseId(String input);
+	/**
+	 * Implementors of this method answer either an instance of {@link IContentId}
+	 * that represents the input, or <code>null</code> if the input cannot be
+	 * parsed.
+	 * 
+	 * @param input a content identifier
+	 * @return an instance of {@link IContentId} or <code>null</code>
+	 */
+	IContentId parseId(String input);
 
 }

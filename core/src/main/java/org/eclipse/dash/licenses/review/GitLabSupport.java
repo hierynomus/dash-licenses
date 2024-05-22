@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2021 The Eclipse Foundation and others.
+ * Copyright (c) 2021, 2022 The Eclipse Foundation and others.
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -9,33 +9,53 @@
  *************************************************************************/
 package org.eclipse.dash.licenses.review;
 
-import java.io.PrintWriter;
 import java.util.List;
+import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
+import jakarta.inject.Inject;
+import jakarta.inject.Provider;
+
+import org.eclipse.dash.licenses.IContentId;
+import org.eclipse.dash.licenses.IProxySettings;
+import org.eclipse.dash.licenses.ISettings;
 import org.eclipse.dash.licenses.LicenseData;
-import org.eclipse.dash.licenses.context.IContext;
+import org.eclipse.dash.licenses.util.GitUtils;
 import org.gitlab4j.api.GitLabApi;
 import org.gitlab4j.api.GitLabApiException;
 import org.gitlab4j.api.models.Issue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.collect.Maps;
 
 public class GitLabSupport {
-	private IContext context;
 
-	public GitLabSupport(IContext context) {
-		this.context = context;
-	}
+	final Logger logger = LoggerFactory.getLogger(GitLabSupport.class);
+	private static final int MAXIMUM_REVIEWS = 100;
 
-	public void createReviews(List<LicenseData> needsReview, PrintWriter output) {
+	@Inject
+	ISettings settings;
+
+	/** Optional HTTP proxy settings. */
+	@Inject
+	Provider<IProxySettings> proxySettings;
+	
+	public void createReviews(List<LicenseData> needsReview, BiConsumer<IContentId, String> monitor) {
 		execute(connection -> {
-			var count = 1;
-			for (LicenseData data : needsReview) {
-				output.println(String.format("Setting up a review for %s.", data.getId().toString()));
+			var count = 0;
+			for (LicenseData licenseData : needsReview) {
+				if (count >= MAXIMUM_REVIEWS)
+					break;
+				count++;
 
-				if (!data.getId().isValid()) {
-					output.println(" - Don't know what to do with this.");
+				if (!licenseData.getId().isValid()) {
+					logger.info("I don't know what to do with {}.", licenseData.getId().toString());
 					continue;
 				}
+
+				logger.info("A review is required for {}.", licenseData.getId().toString());
 
 				/*
 				 * Ideally, we need a way to "create if does not already exist" feature in the
@@ -48,44 +68,55 @@ public class GitLabSupport {
 				 * required to prevent rare duplication.
 				 */
 				try {
-					GitLabReview review = new GitLabReview(context, data);
+					GitLabReview review = new GitLabReview(settings.getProjectId(), getRepository(), licenseData);
 
 					Issue existing = connection.findIssue(review);
 					if (existing != null) {
-						output.println(String.format(" - Existing: %s", existing.getWebUrl()));
+						monitor.accept(licenseData.getId(), existing.getWebUrl());
+						logger.info("A review request already exists {} .", existing.getWebUrl());
 						continue;
 					}
 
 					Issue created = connection.createIssue(review);
 					if (created == null) {
-						output.println(" - An error occurred while attempting to create a review request");
+						logger.error("An error occurred while attempting to create a review request. Aborting.");
 						// TODO If we break creating a review, then don't try to create any more.
 						break;
 					}
 
-					output.println(String.format(" - Created: %s", created.getWebUrl()));
-
+					monitor.accept(licenseData.getId(), created.getWebUrl());
+					logger.info("A review request was created {} .", created.getWebUrl());
 				} catch (GitLabApiException e) {
 					throw new RuntimeException(e);
 				}
 
-				if (count++ >= 5)
-					break;
 			}
 
 			if (count < needsReview.size()) {
-				output.println();
-				output.println("More content needs to be reviewed.");
-				output.println("For now, however, this experimental feature only submits the first five.");
-				output.println();
+				logger.info("More content needs to be reviewed.");
+				logger.info("For now, however, this experimental feature only submits the first {}.\n", count);
 			}
 		});
 	}
 
-	void execute(Consumer<GitLabConnection> callable) {
-		try (GitLabApi gitLabApi = new GitLabApi(context.getSettings().getIpLabHostUrl(),
-				context.getSettings().getIpLabToken())) {
-			callable.accept(new GitLabConnection(gitLabApi, context.getSettings().getIpLabRepositoryPath()));
+	String getRepository() {
+		var repository = settings.getRepository();
+		if (repository != null) return repository;
+		
+		return GitUtils.getEclipseRemote();
+	}
+
+	public void execute(Consumer<GitLabConnection> callable) {
+		Map<String, Object> clientConfig = null;
+		IProxySettings proxySettings = this.proxySettings.get();
+		if (proxySettings != null) {
+			// Configure GitLab API for the proxy server
+			clientConfig = Maps.newHashMap();
+			proxySettings.configureJerseyClient(clientConfig);
+		}
+
+		try (GitLabApi gitLabApi = new GitLabApi(settings.getIpLabHostUrl(), settings.getIpLabToken(), clientConfig)) {
+			callable.accept(new GitLabConnection(gitLabApi, settings.getIpLabRepositoryPath()));
 		}
 	}
 }

@@ -14,14 +14,25 @@ import java.io.Reader;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.eclipse.dash.licenses.context.IContext;
+import org.eclipse.dash.licenses.http.IHttpClientService;
+import org.eclipse.dash.licenses.spdx.SpdxExpression;
 import org.eclipse.dash.licenses.spdx.SpdxExpressionParser;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import jakarta.inject.Inject;
 import jakarta.json.Json;
 import jakarta.json.JsonObject;
 import jakarta.json.JsonReader;
 
 public class LicenseSupport {
+
+	final Logger logger = LoggerFactory.getLogger(LicenseSupport.class);
+
+	@Inject
+	ISettings settings;
+	@Inject
+	IHttpClientService httpClientService;
 
 	private Map<String, String> approvedLicenses;
 
@@ -29,33 +40,26 @@ public class LicenseSupport {
 		Approved, Restricted
 	}
 
-	public LicenseSupport(IContext context) {
-		context.getHttpClientService().get(context.getSettings().getApprovedLicensesUrl(), "application/json",
-				response -> {
-					approvedLicenses = getApprovedLicenses(new InputStreamReader(response));
-				});
+	@Inject
+	public void init() {
+		httpClientService.get(settings.getApprovedLicensesUrl(), "application/json", response -> {
+			approvedLicenses = getApprovedLicenses(new InputStreamReader(response));
+		});
 	}
 
-	private static Map<String, String> getApprovedLicenses(Reader contentReader) {
+	private Map<String, String> getApprovedLicenses(Reader contentReader) {
 		JsonReader reader = Json.createReader(contentReader);
 		JsonObject read = (JsonObject) reader.read();
 
 		Map<String, String> licenses = new HashMap<>();
 		JsonObject approved = read.getJsonObject("approved");
 		if (approved != null) {
-			approved.forEach((key, name) -> licenses.put(key.toUpperCase(), name.toString()));
+			approved.forEach((key, name) -> {
+				logger.debug("Approved License {}", key);
+				licenses.put(key.toUpperCase(), name.toString());
+			});
 		}
 
-		// Augment the official list with licenses that are acceptable, but
-		// not explicitly included in our approved list.
-		licenses.put("EPL-1.0", "Eclipse Public License, v1.0");
-		licenses.put("EPL-2.0", "Eclipse Public License, v2.0");
-		licenses.put("WTFPL", "WTFPL");
-		licenses.put("CC-BY-3.0", "CC-BY-3.0");
-		licenses.put("CC-BY-4.0", "CC-BY-4.0");
-		licenses.put("UNLICENSE", "Unlicense");
-		licenses.put("ARTISTIC-2.0", "Artistic-2.0");
-		licenses.put("BSD-2-Clause-FreeBSD", "BSD 2-Clause FreeBSD License");
 		return licenses;
 	}
 
@@ -78,7 +82,14 @@ public class LicenseSupport {
 		if (expression == null || expression.trim().isEmpty())
 			return Status.Restricted;
 
-		if (new SpdxExpressionParser().parse(expression).matchesApproved(approvedLicenses.keySet())) {
+		return getStatus(new SpdxExpressionParser().parse(expression));
+	}
+
+	public Status getStatus(SpdxExpression expression) {
+		if (expression == null)
+			return Status.Restricted;
+
+		if (expression.matchesApproved(approvedLicenses.keySet())) {
 			return Status.Approved;
 		}
 

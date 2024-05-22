@@ -16,42 +16,47 @@ import java.util.Collection;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
+import jakarta.inject.Inject;
+
 import org.eclipse.dash.licenses.IContentData;
 import org.eclipse.dash.licenses.IContentId;
 import org.eclipse.dash.licenses.ILicenseDataProvider;
-import org.eclipse.dash.licenses.context.IContext;
-
-import com.google.common.flogger.FluentLogger;
+import org.eclipse.dash.licenses.ISettings;
+import org.eclipse.dash.licenses.http.IHttpClientService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import jakarta.json.Json;
+import jakarta.json.JsonArray;
 import jakarta.json.JsonArrayBuilder;
 import jakarta.json.JsonObject;
+import jakarta.json.JsonObjectBuilder;
 import jakarta.json.JsonReader;
 
 public class EclipseFoundationSupport implements ILicenseDataProvider {
-	private IContext context;
-	private static final FluentLogger log = FluentLogger.forEnclosingClass();
+	@Inject
+	ISettings settings;
+	@Inject
+	IHttpClientService httpClientService;
 
-	public EclipseFoundationSupport(IContext context) {
-		this.context = context;
-	}
+	final Logger logger = LoggerFactory.getLogger(EclipseFoundationSupport.class);
 
 	@Override
 	public void queryLicenseData(Collection<IContentId> ids, Consumer<IContentData> consumer) {
 		if (ids.isEmpty())
 			return;
 
-		log.atInfo().log("Querying Eclipse Foundation for license data for %1$d items.", ids.size());
+		String url = settings.getLicenseCheckUrl();
+		if (url.isBlank()) {
+			logger.debug("Bypassing Eclipse Foundation.");
+			return;
+		}
 
-		String url = context.getSettings().getLicenseCheckUrl();
+		logger.info("Querying Eclipse Foundation for license data for {} items.", ids.size());
 
-		JsonArrayBuilder builder = Json.createBuilderFactory(null).createArrayBuilder();
-		ids.stream().forEach(id -> builder.add(id.toString()));
-		String json = builder.build().toString();
-		String form = URLEncoder.encode("json", StandardCharsets.UTF_8) + "="
-				+ URLEncoder.encode(json, StandardCharsets.UTF_8);
+		String form = encodeRequestPayload(ids);
 
-		int code = context.getHttpClientService().post(url, "application/x-www-form-urlencoded", form, response -> {
+		int code = httpClientService.post(url, "application/x-www-form-urlencoded", form, response -> {
 			AtomicInteger counter = new AtomicInteger();
 
 			JsonReader reader = Json.createReader(new StringReader(response));
@@ -60,22 +65,71 @@ public class EclipseFoundationSupport implements ILicenseDataProvider {
 			JsonObject approved = read.getJsonObject("approved");
 			if (approved != null)
 				approved.forEach((key, each) -> {
-					consumer.accept(new FoundationData(each.asJsonObject()));
+					FoundationData data = new FoundationData(each.asJsonObject());
+					logger.debug("EF approved: {} ({}) score: {} {} {}", data.getId(), data.getRule(), data.getScore(),
+							data.getLicense(), data.getAuthority());
+					consumer.accept(data);
 					counter.incrementAndGet();
 				});
 
 			JsonObject restricted = read.getJsonObject("restricted");
 			if (restricted != null)
 				restricted.forEach((key, each) -> {
-					consumer.accept(new FoundationData(each.asJsonObject()));
+					FoundationData data = new FoundationData(each.asJsonObject());
+					logger.debug("EF restricted: {} score: {} {} {}", data.getId(), data.getScore(), data.getLicense(),
+							data.getAuthority());
+					consumer.accept(data);
 					counter.incrementAndGet();
 				});
 
-			log.atInfo().log("Found %1$d items.", counter.get());
+			logger.info("Found {} items.", counter.get());
 		});
 		if (code != 200) {
-			log.atSevere().log("Eclipse Foundation data search time out; maybe decrease batch size.");
+			logger.error("Error response from the Eclipse Foundation {}", code);
+			throw new RuntimeException("Received an error response from the Eclipse Foundation.");
 		}
 	}
 
+	private String encodeRequestPayload(Collection<IContentId> ids) {
+		JsonObject build = buildRequestPayload(ids);
+		String json = build.toString();
+		String form = URLEncoder.encode("request", StandardCharsets.UTF_8) + "="
+				+ URLEncoder.encode(json, StandardCharsets.UTF_8);
+		return form;
+	}
+
+	private JsonObject buildRequestPayload(Collection<IContentId> ids) {
+		JsonObjectBuilder request = Json.createObjectBuilder();
+
+		var projectId = settings.getProjectId();
+		if (projectId != null) {
+			logger.debug("Querying for project {}.", projectId);
+			request.add("project", projectId);
+		}
+
+		JsonArrayBuilder builder = Json.createBuilderFactory(null).createArrayBuilder();
+		ids.stream().forEach(id -> {
+			builder.add(id.toString());
+			logger.debug("Sending to EF {}", id);
+		});
+
+		request.add("dependencies", builder);
+
+		return request.build();
+	}
+
+	private String encodeJsonPayload(Collection<IContentId> ids) {
+		JsonArray build = buildJsonPayload(ids);
+		String json = build.toString();
+		String form = URLEncoder.encode("json", StandardCharsets.UTF_8) + "="
+				+ URLEncoder.encode(json, StandardCharsets.UTF_8);
+		return form;
+	}
+
+	private JsonArray buildJsonPayload(Collection<IContentId> ids) {
+		JsonArrayBuilder builder = Json.createBuilderFactory(null).createArrayBuilder();
+		ids.stream().forEach(id -> builder.add(id.toString()));
+
+		return builder.build();
+	}
 }

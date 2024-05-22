@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2019, The Eclipse Foundation and others.
+ * Copyright (c) 2019,2022 The Eclipse Foundation and others.
  *
  * This program and the accompanying materials are made available under
  * the terms of the Eclipse Public License 2.0 which accompanies this
@@ -20,14 +20,22 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.eclipse.dash.licenses.IContentId;
-import org.eclipse.dash.licenses.context.DefaultContext;
-import org.eclipse.dash.licenses.context.IContext;
+import org.eclipse.dash.licenses.LicenseChecker;
+import org.eclipse.dash.licenses.context.LicenseToolModule;
 import org.eclipse.dash.licenses.review.CreateReviewRequestCollector;
+import org.eclipse.dash.licenses.review.GitLabSupport;
+import org.eclipse.dash.licenses.validation.EclipseProjectIdValidator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.inject.Guice;
+import com.google.inject.Injector;
 
 /**
- * This class provides a CLI entrypoint to determine licenses for content. The
+ * This class provides a CLI entry point to determine licenses for content. The
  * tool can be invoked in a few different ways, e.g.
  *
  * <pre>
@@ -45,12 +53,25 @@ import org.eclipse.dash.licenses.review.CreateReviewRequestCollector;
  * @param args
  */
 public class Main {
+	/**
+	 * Exit code that indicates there was an internal error, orthogonal to license
+	 * check results, that prevented `dash-licenses` from successfully running or
+	 * completing its work. Depending on the exact problem, a re-try might or might
+	 * no work.
+	 */
+	final static Integer INTERNAL_ERROR = 127;
+
+	final Logger logger = LoggerFactory.getLogger(Main.class);
 
 	public static void main(String[] args) {
 		CommandLineSettings settings = CommandLineSettings.getSettings(args);
+		new Main().doit(settings);
+	}
+
+	void doit(CommandLineSettings settings) {
 		if (!settings.isValid()) {
 			CommandLineSettings.printUsage(System.out);
-			System.exit(1);
+			System.exit(INTERNAL_ERROR);
 		}
 
 		if (settings.isShowHelp()) {
@@ -58,12 +79,22 @@ public class Main {
 			System.exit(0);
 		}
 
-		IContext context = new DefaultContext(settings);
+		Injector injector = Guice.createInjector(new LicenseToolModule(settings));
+
+		if (settings.getProjectId() != null) {
+			var validator = injector.getInstance(EclipseProjectIdValidator.class);
+			if (!validator.validate(settings.getProjectId(), message -> System.out.println(message))) {
+				System.exit(INTERNAL_ERROR);
+			}
+		}
+
+		LicenseChecker checker = injector.getInstance(LicenseChecker.class);
 
 		List<IResultsCollector> collectors = new ArrayList<>();
 
 		// TODO Set up collectors based on command line parameters
-		IResultsCollector primaryCollector = new NeedsReviewCollector(System.out);
+		IResultsCollector primaryCollector = new NeedsReviewCollector();
+
 		collectors.add(primaryCollector);
 
 		String summaryPath = settings.getSummaryFilePath();
@@ -72,12 +103,13 @@ public class Main {
 				collectors.add(new CSVCollector(getWriter(summaryPath)));
 			} catch (FileNotFoundException e1) {
 				System.out.println("Can't write to " + summaryPath);
-				System.exit(1);
+				System.exit(INTERNAL_ERROR);
 			}
 		}
 
 		if (settings.isReview()) {
-			collectors.add(new CreateReviewRequestCollector(context, System.out));
+			collectors
+					.add(new CreateReviewRequestCollector(injector.getInstance(GitLabSupport.class), (id, url) -> {}));
 		}
 
 		Arrays.stream(settings.getFileNames()).forEach(name -> {
@@ -87,43 +119,55 @@ public class Main {
 			} catch (FileNotFoundException e) {
 				System.out.println(String.format("The file \"%s\" does not exist.", name));
 				CommandLineSettings.printUsage(System.out);
-				System.exit(1);
+				System.exit(INTERNAL_ERROR);
 			}
 			if (reader != null) {
-				Collection<IContentId> dependencies = reader.getContentIds();
+				var filter = new ExcludedSourcesFilter(settings.getExcludedSources());
 
-				var checker = context.getLicenseCheckerService();
-				checker.getLicenseData(dependencies).forEach((id, licenseData) -> {
-					collectors.forEach(collector -> collector.accept(licenseData));
-				});
+				Collection<IContentId> dependencies = reader
+						.getContentIds()
+						.stream()
+						.filter(each -> filter.keep(each))
+						.collect(Collectors.toList());
+
+				try {
+					checker.getLicenseData(dependencies).forEach((id, licenseData) -> {
+						collectors.forEach(collector -> collector.accept(licenseData));
+					});
+				} catch (RuntimeException e) {
+					logger.debug(e.getMessage(), e);
+					System.exit(INTERNAL_ERROR);
+				}
 			}
 		});
 
 		collectors.forEach(IResultsCollector::close);
 
-		System.exit(primaryCollector.getStatus());
+		System.exit(Math.min(primaryCollector.getStatus(), INTERNAL_ERROR - 1));
 	}
 
-	private static OutputStream getWriter(String path) throws FileNotFoundException {
+	private OutputStream getWriter(String path) throws FileNotFoundException {
 		if ("-".equals(path))
 			return System.out;
 		return new FileOutputStream(new File(path));
 	}
 
 	@SuppressWarnings("resource")
-	private static IDependencyListReader getReader(String name) throws FileNotFoundException {
+	private IDependencyListReader getReader(String name) throws FileNotFoundException {
 		if ("-".equals(name)) {
 			return new FlatFileReader(new InputStreamReader(System.in));
 		} else {
 			File input = new File(name);
 			if (input.exists()) {
-				if ("package-lock.json".equals(input.getName())) {
-					return new PackageLockFileReader(new FileInputStream(input));
-				}
-				if ("yarn.lock".equals(input.getName())) {
-					return new YarnLockFileReader(new FileReader(input));
-				}
-				return new FlatFileReader(new FileReader(input));
+                switch (input.getName()) {
+                    case "pnpm-lock.yaml":
+                        return new PnpmPackageLockFileReader(new FileInputStream(input));
+                    case "package-lock.json":
+                        return new PackageLockFileReader(new FileInputStream(input));
+                    case "yarn.lock":
+                        return new YarnLockFileReader(new FileReader(input));
+                }
+                return new FlatFileReader(new FileReader(input));
 			} else {
 				throw new FileNotFoundException(name);
 			}
