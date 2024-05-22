@@ -7,7 +7,7 @@ RUN cd /project && \
 
 FROM adoptopenjdk:11
 
-COPY --from=builder /project/core/target/org.eclipse.dash.licenses-0.0.1-SNAPSHOT.jar /
+COPY --from=builder /project/shaded/target/org.eclipse.dash.licenses-1.1.1-SNAPSHOT.jar /
 
 VOLUME [ "/data" ]
-ENTRYPOINT [ "java", "-jar", "/org.eclipse.dash.licenses-0.0.1-SNAPSHOT.jar", "-summary", "/data/LICENSES" ]
+ENTRYPOINT [ "java", "-jar", "/org.eclipse.dash.licenses-1.1.1-SNAPSHOT.jar", "-summary", "/data/LICENSES" ]
